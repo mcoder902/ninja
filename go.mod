@@ -1,4 +1,4 @@
-module github.com/mcoder/ninja
+module github.com/mcoder902/ninja
 
 go 1.26.0
 
