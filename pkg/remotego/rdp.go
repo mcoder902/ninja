@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mcoder/ninja/internal/protocol/rdp"
+	"github.com/mcoder902/ninja/internal/protocol/rdp"
 )
 
 type RDPSession struct {

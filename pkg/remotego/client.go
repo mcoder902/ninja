@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mcoder/ninja/internal/engine"
+	"github.com/mcoder902/ninja/internal/engine"
 )
 
 type Client struct {
