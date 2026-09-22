@@ -291,3 +291,14 @@ func remoteClassifier(err error) engine.Classification {
 	}
 	return engine.Classification{Retryable: IsNetworkTransient(err)}
 }
+
+func (c *Client) emitEvent(t Target, et EventType, detail string) {
+	if c != nil && c.cfg != nil && c.cfg.EventCallback != nil {
+		c.cfg.EventCallback(ProbeEvent{
+			Target:    t,
+			Type:      et,
+			Timestamp: time.Now(),
+			Detail:    detail,
+		})
+	}
+}

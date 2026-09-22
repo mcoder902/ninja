@@ -51,13 +51,20 @@ type rdpOutcome struct {
 
 func (c *Client) rdpConnect(ctx context.Context, t Target, probe bool) (out rdpOutcome) {
 	addr := t.Addr()
+
+	// انتشار رویداد: شروع اتصال TCP[cite: 6]
+	c.emitEvent(t, EventDialing, "initiating RDP TCP connection")
 	conn, err := c.dialTCP(ctx, t)
 	if err != nil {
+		c.emitEvent(t, EventFailed, err.Error())
 		out.err = err
 		return out
 	}
+	c.emitEvent(t, EventConnected, "RDP TCP connection established")
 	out.reachable = true
 
+	// انتشار رویداد: شروع هندشیک و مذاکره پروتکل[cite: 6]
+	c.emitEvent(t, EventHandshaking, "negotiating RDP security protocols")
 	offer := rdp.ProtoSSL | rdp.ProtoHybrid | rdp.ProtoHybridEx
 	neg, nerr := rdp.Negotiate(ctx, conn, rdp.Options{
 		Offer:              offer,
@@ -68,6 +75,7 @@ func (c *Client) rdpConnect(ctx context.Context, t Target, probe bool) (out rdpO
 	if nerr != nil {
 		_ = conn.Close()
 		out.err, out.confirmed, out.banner = classifyRDPError(addr, nerr)
+		c.emitEvent(t, EventFailed, out.err.Error())
 		return out
 	}
 
@@ -83,6 +91,8 @@ func (c *Client) rdpConnect(ctx context.Context, t Target, probe bool) (out rdpO
 			user = parts[1]
 		}
 
+		// انتشار رویداد: شروع احراز هویت CredSSP[cite: 6]
+		c.emitEvent(t, EventAuthenticating, "submitting CredSSP credentials")
 		if total := c.cfg.AuthTimeout; total > 0 {
 			_ = neg.Conn.SetDeadline(time.Now().Add(total))
 		}
@@ -106,11 +116,13 @@ func (c *Client) rdpConnect(ctx context.Context, t Target, probe bool) (out rdpO
 			} else {
 				out.err = ClassifyNetError(addr, aerr)
 			}
+			c.emitEvent(t, EventFailed, out.err.Error())
 			return out
 		}
 		out.authOK = true
 	}
 
+	c.emitEvent(t, EventSuccess, "RDP probe/authentication succeeded")
 	return out
 }
 

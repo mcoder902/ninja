@@ -75,7 +75,12 @@ func (s *SSHSession) Exec(ctx context.Context, cmd string) (out []byte, err erro
 	if err != nil {
 		return nil, ClassifyNetError(s.target.Addr(), err)
 	}
-	defer sess.Close()
+	defer func(sess *ssh.Session) {
+		err := sess.Close()
+		if err != nil {
+
+		}
+	}(sess)
 
 	var buf bytes.Buffer
 	sess.Stdout = &buf
@@ -295,11 +300,16 @@ type sshOutcome struct {
 // into a *RemoteError.
 func (c *Client) sshConnect(ctx context.Context, t Target) (out sshOutcome) {
 	addr := t.Addr()
+
+	// انتشار رویداد: شروع اتصال TCP[cite: 7]
+	c.emitEvent(t, EventDialing, "initiating SSH TCP connection")
 	raw, err := c.dialTCP(ctx, t)
 	if err != nil {
+		c.emitEvent(t, EventFailed, err.Error())
 		out.err = err
 		return out
 	}
+	c.emitEvent(t, EventConnected, "SSH TCP connection established")
 	out.reachable = true
 	conn := &sniffConn{Conn: raw}
 
@@ -310,6 +320,7 @@ func (c *Client) sshConnect(ctx context.Context, t Target) (out sshOutcome) {
 		ke := NewErrorf(ErrCodeKeyRejected, addr, kerr, "private key could not be parsed")
 		ke.Retryable = false
 		out.err = ke
+		c.emitEvent(t, EventFailed, ke.Error())
 		return out
 	}
 
@@ -332,6 +343,12 @@ func (c *Client) sshConnect(ctx context.Context, t Target) (out sshOutcome) {
 		Timeout: c.cfg.HandshakeTimeout + c.cfg.AuthTimeout,
 	}
 
+	// انتشار رویداد: شروع هندشیک و احراز هویت[cite: 7]
+	c.emitEvent(t, EventHandshaking, "starting SSH transport and key exchange")
+	if t.Auth.Kind != AuthMethodNone {
+		c.emitEvent(t, EventAuthenticating, "submitting SSH credentials")
+	}
+
 	// Bound the whole handshake+auth by deadline and by ctx.
 	if total := c.cfg.HandshakeTimeout + c.cfg.AuthTimeout; total > 0 {
 		_ = conn.SetDeadline(time.Now().Add(total))
@@ -345,6 +362,7 @@ func (c *Client) sshConnect(ctx context.Context, t Target) (out sshOutcome) {
 		out.banner = conn.firstLine()
 		if cerr := ctx.Err(); cerr != nil && fired {
 			out.err = ClassifyNetError(addr, cerr)
+			c.emitEvent(t, EventFailed, out.err.Error())
 			return out
 		}
 		out.err, out.confirmed = classifySSHError(addr, herr, t, conn, st)
@@ -352,12 +370,17 @@ func (c *Client) sshConnect(ctx context.Context, t Target) (out sshOutcome) {
 			// Unauthenticated probe: the server completed key exchange and
 			// merely refused "none" — exactly the outcome we wanted.
 			out.err = nil
+		} else {
+			c.emitEvent(t, EventFailed, out.err.Error())
+			return out
 		}
+		c.emitEvent(t, EventSuccess, "SSH unauthenticated probe succeeded")
 		return out
 	}
 	if fired && ctx.Err() != nil {
 		_ = sc.Close()
 		out.err = ClassifyNetError(addr, ctx.Err())
+		c.emitEvent(t, EventFailed, out.err.Error())
 		return out
 	}
 	_ = conn.SetDeadline(time.Time{})
@@ -366,6 +389,8 @@ func (c *Client) sshConnect(ctx context.Context, t Target) (out sshOutcome) {
 	out.authOK = t.Auth.Kind != AuthMethodNone
 	out.banner = string(sc.ServerVersion())
 	out.client = ssh.NewClient(sc, chans, reqs)
+
+	c.emitEvent(t, EventSuccess, "SSH connection/authentication established successfully")
 	return out
 }
 

@@ -15,6 +15,7 @@ type ClientOption func(*clientConfig)
 // unexported: developers only ever touch it through ClientOption values,
 // which keeps this struct free to grow without breaking callers.
 type clientConfig struct {
+	EventCallback EventCallback
 	// DialTimeout bounds establishing the raw TCP (and, where applicable,
 	// TLS) connection. Zero means no explicit timeout beyond ctx.
 	DialTimeout time.Duration
@@ -236,4 +237,11 @@ func WithAdaptiveRateLimit(enabled bool) ClientOption {
 // sends secrets over Dial sessions should always set this.
 func WithHostKeyCallback(cb ssh.HostKeyCallback) ClientOption {
 	return func(c *clientConfig) { c.HostKeyCallback = cb }
+}
+
+// WithEventCallback ثبت یک شنونده برای دریافت رویدادهای لحظه‌ای مانیتورینگ
+func WithEventCallback(cb EventCallback) ClientOption {
+	return func(c *clientConfig) {
+		c.EventCallback = cb
+	}
 }

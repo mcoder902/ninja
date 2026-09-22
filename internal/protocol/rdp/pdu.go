@@ -193,11 +193,19 @@ func ReadTPKT(r io.Reader) ([]byte, error) {
 	if total < 4 || total > maxTPKTLength {
 		return nil, &MalformedError{Reason: fmt.Sprintf("implausible TPKT length %d", total)}
 	}
-	payload := make([]byte, total-4)
-	if _, err := io.ReadFull(r, payload); err != nil {
+
+	payloadLen := total - 4
+	// استفاده از استخر بافر به جای make ساده برای جلوگیری از فشار روی GC
+	payloadBuf := GetBuffer(payloadLen)
+
+	if _, err := io.ReadFull(r, payloadBuf); err != nil {
+		PutBuffer(payloadBuf) // در صورت بروز خطا، بافر را پس می‌دهیم تا نشت حافظه نشود
 		return nil, err
 	}
-	return payload, nil
+
+	// نکته: از آنجایی که payload به بیرون بازگرداندن می‌شود،
+	// در صورتی که caller بخواهد آن را نگه دارد، کپی می‌شود یا پس از اتمام کار آزاد می‌گردد.
+	return payloadBuf, nil
 }
 
 // MalformedError indicates the peer's bytes could not be parsed as a valid

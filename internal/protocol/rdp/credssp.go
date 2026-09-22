@@ -127,7 +127,6 @@ func readTSRequest(r io.Reader) (*TSRequest, error) {
 	if tag[0] != 0x30 {
 		return nil, fmt.Errorf("credssp: expected ASN.1 sequence (0x30), got 0x%02X", tag[0])
 	}
-
 	var length int
 	if tag[1] < 0x80 {
 		length = int(tag[1])
@@ -145,10 +144,13 @@ func readTSRequest(r io.Reader) (*TSRequest, error) {
 		}
 	}
 
-	body := make([]byte, length)
+	// استفاده از بافر پولی برای بدنه درخواست CredSSP
+	body := GetBuffer(length)
 	if _, err := io.ReadFull(r, body); err != nil {
+		PutBuffer(body)
 		return nil, err
 	}
+	defer PutBuffer(body) // پس از اتمام پردازش و آنمارشال، بافر به استخر برمی‌گردد
 
 	fullPDU := append([]byte{tag[0], tag[1]}, body...)
 	var req TSRequest
