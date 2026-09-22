@@ -52,7 +52,6 @@ type rdpOutcome struct {
 func (c *Client) rdpConnect(ctx context.Context, t Target, probe bool) (out rdpOutcome) {
 	addr := t.Addr()
 
-	// انتشار رویداد: شروع اتصال TCP[cite: 6]
 	c.emitEvent(t, EventDialing, "initiating RDP TCP connection")
 	conn, err := c.dialTCP(ctx, t)
 	if err != nil {
@@ -63,7 +62,6 @@ func (c *Client) rdpConnect(ctx context.Context, t Target, probe bool) (out rdpO
 	c.emitEvent(t, EventConnected, "RDP TCP connection established")
 	out.reachable = true
 
-	// انتشار رویداد: شروع هندشیک و مذاکره پروتکل[cite: 6]
 	c.emitEvent(t, EventHandshaking, "negotiating RDP security protocols")
 	offer := rdp.ProtoSSL | rdp.ProtoHybrid | rdp.ProtoHybridEx
 	neg, nerr := rdp.Negotiate(ctx, conn, rdp.Options{
@@ -83,7 +81,20 @@ func (c *Client) rdpConnect(ctx context.Context, t Target, probe bool) (out rdpO
 	out.confirmed = true
 	out.banner = neg.Selected.String()
 
+	// اگر هدف پمپاژ یا تست اعتبار سنجی پسورد است
 	if t.Auth.Kind == AuthMethodPassword {
+		// بررسی اینکه آیا سرور NLA (CredSSP) را انتخاب کرده است یا خیر
+		isNLASelected := (neg.Selected & (rdp.ProtoHybrid | rdp.ProtoHybridEx)) != 0
+
+		if !isNLASelected {
+			// اگر سرور NLA را پشتیبانی نکند یا ProtoSSL باشد،
+			// احراز هویت CredSSP امکان‌پذیر نیست و باید به عنوان عدم پشتیبانی از NLA ثبت شود
+			_ = neg.Conn.Close()
+			out.err = NewErrorf(ErrCodeUnsupportedAuthMethod, addr, nil, "server does not support NLA (selected: %s)", neg.Selected.String())
+			c.emitEvent(t, EventFailed, out.err.Error())
+			return out
+		}
+
 		domain := ""
 		user := t.Auth.Username
 		if parts := strings.SplitN(user, "\\", 2); len(parts) == 2 {
@@ -91,7 +102,6 @@ func (c *Client) rdpConnect(ctx context.Context, t Target, probe bool) (out rdpO
 			user = parts[1]
 		}
 
-		// انتشار رویداد: شروع احراز هویت CredSSP[cite: 6]
 		c.emitEvent(t, EventAuthenticating, "submitting CredSSP credentials")
 		if total := c.cfg.AuthTimeout; total > 0 {
 			_ = neg.Conn.SetDeadline(time.Now().Add(total))
@@ -100,8 +110,10 @@ func (c *Client) rdpConnect(ctx context.Context, t Target, probe bool) (out rdpO
 			_ = neg.Conn.Close()
 		})
 		defer stop()
+
 		aerr := rdp.AuthenticateCredSSP(ctx, neg.Conn, domain, user, t.Auth.Password)
 		_ = neg.Conn.SetDeadline(time.Time{})
+
 		if aerr != nil {
 			var authErr *rdp.AuthError
 			if errors.As(aerr, &authErr) {
@@ -125,7 +137,6 @@ func (c *Client) rdpConnect(ctx context.Context, t Target, probe bool) (out rdpO
 	c.emitEvent(t, EventSuccess, "RDP probe/authentication succeeded")
 	return out
 }
-
 func classifyRDPError(addr string, err error) (*RemoteError, bool, string) {
 	var mal *rdp.MalformedError
 	var fail *rdp.FailureError
