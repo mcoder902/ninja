@@ -81,7 +81,12 @@ func Negotiate(ctx context.Context, conn net.Conn, opts Options) (*Negotiation, 
 
 	if opts.Timeout > 0 {
 		_ = conn.SetDeadline(time.Now().Add(opts.Timeout))
-		defer conn.SetDeadline(time.Time{}) //nolint:errcheck
+		defer func(conn net.Conn, t time.Time) {
+			err := conn.SetDeadline(t)
+			if err != nil {
+
+			}
+		}(conn, time.Time{}) //nolint:errcheck
 	}
 
 	if err := WriteConnectionRequest(conn, opts.Cookie, offer); err != nil {
@@ -104,8 +109,8 @@ func Negotiate(ctx context.Context, conn net.Conn, opts Options) (*Negotiation, 
 	if cc.Selected&(ProtoSSL|ProtoHybrid|ProtoHybridEx|ProtoRDSTLS) != 0 {
 		cfg := &tls.Config{
 			ServerName:         opts.ServerName,
-			InsecureSkipVerify: opts.InsecureSkipVerify, //nolint:gosec // caller-controlled opt-in
-			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: opts.InsecureSkipVerify,
+			MinVersion:         tls.VersionTLS10,
 		}
 		tc := tls.Client(conn, cfg)
 		if err := tc.HandshakeContext(ctx); err != nil {

@@ -95,22 +95,18 @@ type clientConfig struct {
 // defaults, before any ClientOption is applied.
 func defaultConfig() *clientConfig {
 	return &clientConfig{
-		DialTimeout:      10 * time.Second,
-		HandshakeTimeout: 10 * time.Second,
-		AuthTimeout:      15 * time.Second,
-
-		Retries:        0,
-		RetryBaseDelay: 250 * time.Millisecond,
-		RetryMaxDelay:  10 * time.Second,
-		RetryJitter:    0.2,
-
-		MaxConcurrency:   0, // unbounded by default — see field doc above.
-		ResultBufferSize: 64,
-
-		TCPKeepAlive: 30 * time.Second,
-		NoDelay:      true,
-
-		InsecureSkipTLSVerify: false,
+		DialTimeout:           10 * time.Second,
+		HandshakeTimeout:      10 * time.Second,
+		AuthTimeout:           15 * time.Second,
+		Retries:               0,
+		RetryBaseDelay:        250 * time.Millisecond,
+		RetryMaxDelay:         10 * time.Second,
+		RetryJitter:           0.2,
+		MaxConcurrency:        0,
+		ResultBufferSize:      64,
+		TCPKeepAlive:          30 * time.Second,
+		NoDelay:               true,
+		InsecureSkipTLSVerify: true, // برای پروتکل‌های مثل RDP این مقدار باید پیش‌فرض true باشد
 	}
 }
 
