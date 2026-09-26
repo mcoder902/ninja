@@ -32,7 +32,6 @@ func GenerateNTLMNegotiate() []byte {
 	buf := make([]byte, 32)
 	copy(buf[0:8], ntlmSig)
 	binary.LittleEndian.PutUint32(buf[8:12], ntlmTypeNegotiate)
-	// فعال‌سازی تمام فلگ‌های استاندارد جهت دریافت TargetInfo
 	flags := uint32(negotiateUnicode | negotiateNTLMKey | negotiateAlwaysSign | negotiateExtendedSec | negotiateTargetInfo | negotiate128Bit | negotiate56Bit)
 	binary.LittleEndian.PutUint32(buf[12:16], flags)
 	return buf
@@ -74,6 +73,7 @@ func ParseNTLMChallenge(data []byte) (*NTLMChallenge, error) {
 	}
 	return ch, nil
 }
+
 func fromUnicode(b []byte) string {
 	u16 := make([]uint16, len(b)/2)
 	for i := 0; i < len(u16); i++ {
@@ -82,30 +82,56 @@ func fromUnicode(b []byte) string {
 	return string(utf16.Decode(u16))
 }
 
+// استخراج دقیق تایم‌استمپ ارائه‌شده توسط سرور از درون TargetInfo
+func extractServerTimestamp(targetInfo []byte) []byte {
+	for i := 0; i+4 <= len(targetInfo); {
+		avId := binary.LittleEndian.Uint16(targetInfo[i : i+2])
+		avLen := int(binary.LittleEndian.Uint16(targetInfo[i+2 : i+4]))
+		if avId == 0 { // MsvAvEOL
+			break
+		}
+		if avId == 7 && avLen == 8 && i+4+8 <= len(targetInfo) { // MsvAvTimestamp
+			return targetInfo[i+4 : i+4+8]
+		}
+		i += 4 + avLen
+	}
+	return nil
+}
+
 func GenerateNTLMAuthenticate(domain, user, password string, ch *NTLMChallenge) ([]byte, error) {
 	var clientNonce [8]byte
 	if _, err := rand.Read(clientNonce[:]); err != nil {
 		return nil, err
 	}
 
-	// اگر کاربر دامین نداده باشد، از TargetName سرور به عنوان دامین محلی استفاده می‌شود
 	if domain == "" && ch.TargetName != "" {
 		domain = ch.TargetName
 	}
 
+	// ۱. حل باگ دامین: تبدیل دامین و یوزر به حروف بزرگ طبق استاندارد MS-NLMP
 	ntlmHash := md4Hash(toUnicode(password))
 	h := hmac.New(md5.New, ntlmHash)
 	h.Write(toUnicode(strings.ToUpper(user)))
-	h.Write(toUnicode(domain))
+	h.Write(toUnicode(strings.ToUpper(domain)))
 	ntlmV2Hash := h.Sum(nil)
 
-	now := time.Now().UTC().UnixNano()/100 + 116444736000000000
+	// ۲. حل باگ تایم‌استمپ: اولویت با تایم‌استمپ سرور است تا مانع خطای Replay شود
+	var timestampBytes []byte
+	if serverTime := extractServerTimestamp(ch.TargetInfo); len(serverTime) == 8 {
+		timestampBytes = serverTime
+	} else {
+		now := time.Now().UTC().UnixNano()/100 + 116444736000000000
+		var b [8]byte
+		binary.LittleEndian.PutUint64(b[:], uint64(now))
+		timestampBytes = b[:]
+	}
+
 	var blob bytes.Buffer
-	blob.Write([]byte{0x01, 0x01, 0x00, 0x00})
-	blob.Write([]byte{0x00, 0x00, 0x00, 0x00})
-	_ = binary.Write(&blob, binary.LittleEndian, now)
-	blob.Write(clientNonce[:])
-	blob.Write([]byte{0x00, 0x00, 0x00, 0x00})
+	blob.Write([]byte{0x01, 0x01, 0x00, 0x00}) // Signature
+	blob.Write([]byte{0x00, 0x00, 0x00, 0x00}) // Reserved
+	blob.Write(timestampBytes)                 // استفاده از تایم‌استمپ معتبر
+	blob.Write(clientNonce[:])                 // Client Nonce
+	blob.Write([]byte{0x00, 0x00, 0x00, 0x00}) // Zero
 	if len(ch.TargetInfo) > 0 {
 		blob.Write(ch.TargetInfo)
 	} else {
@@ -143,7 +169,8 @@ func GenerateNTLMAuthenticate(domain, user, password string, ch *NTLMChallenge) 
 	binary.LittleEndian.PutUint16(buf[54:56], 0)
 	binary.LittleEndian.PutUint32(buf[56:60], uint32(offset))
 
-	flags := uint32(negotiateUnicode | negotiateNTLMKey | negotiateAlwaysSign | negotiateExtendedSec | negotiate128Bit | negotiate56Bit)
+	// ۳. حل باگ فلگ: اضافه کردن negotiateTargetInfo به بسته احراز هویت
+	flags := uint32(negotiateUnicode | negotiateNTLMKey | negotiateAlwaysSign | negotiateExtendedSec | negotiateTargetInfo | negotiate128Bit | negotiate56Bit)
 	binary.LittleEndian.PutUint32(buf[60:64], flags)
 
 	return buf, nil
@@ -176,7 +203,6 @@ func md4Hash(data []byte) []byte {
 			x[j] = binary.LittleEndian.Uint32(padded[i+j*4 : i+j*4+4])
 		}
 		aa, bb, cc, dd := a, b, c, d
-
 		a = rot((a + (b&c | ^b&d) + x[0]), 3)
 		d = rot((d + (a&b | ^a&c) + x[1]), 7)
 		c = rot((c + (d&a | ^d&b) + x[2]), 11)
@@ -241,7 +267,9 @@ func md4Hash(data []byte) []byte {
 	return res
 }
 
-func rot(x uint32, n uint) uint32 { return (x << n) | (x >> (32 - n)) }
+func rot(x uint32, n uint) uint32 {
+	return (x << n) | (x >> (32 - n))
+}
 
 func padMD4(data []byte) []byte {
 	bitLen := uint64(len(data)) * 8
