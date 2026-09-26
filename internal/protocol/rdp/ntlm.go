@@ -32,8 +32,8 @@ func GenerateNTLMNegotiate() []byte {
 	buf := make([]byte, 32)
 	copy(buf[0:8], ntlmSig)
 	binary.LittleEndian.PutUint32(buf[8:12], ntlmTypeNegotiate)
-
-	flags := uint32(negotiateUnicode | negotiateNTLMKey | negotiateExtendedSec | negotiate128Bit | negotiate56Bit)
+	// فعال‌سازی تمام فلگ‌های استاندارد جهت دریافت TargetInfo
+	flags := uint32(negotiateUnicode | negotiateNTLMKey | negotiateAlwaysSign | negotiateExtendedSec | negotiateTargetInfo | negotiate128Bit | negotiate56Bit)
 	binary.LittleEndian.PutUint32(buf[12:16], flags)
 	return buf
 }
@@ -41,6 +41,7 @@ func GenerateNTLMNegotiate() []byte {
 type NTLMChallenge struct {
 	ServerChallenge [8]byte
 	TargetInfo      []byte
+	TargetName      string
 	Flags           uint32
 }
 
@@ -52,10 +53,17 @@ func ParseNTLMChallenge(data []byte) (*NTLMChallenge, error) {
 	if msgType != ntlmTypeChallenge {
 		return nil, fmt.Errorf("rdp/ntlm: expected type 2 challenge, got %d", msgType)
 	}
-
 	ch := &NTLMChallenge{}
 	copy(ch.ServerChallenge[:], data[24:32])
 	ch.Flags = binary.LittleEndian.Uint32(data[20:24])
+
+	if len(data) >= 20 {
+		tNameLen := binary.LittleEndian.Uint16(data[12:14])
+		tNameOffset := binary.LittleEndian.Uint32(data[16:20])
+		if int(tNameOffset+uint32(tNameLen)) <= len(data) && tNameLen > 0 {
+			ch.TargetName = fromUnicode(data[tNameOffset : tNameOffset+uint32(tNameLen)])
+		}
+	}
 
 	if len(data) >= 48 {
 		tiLen := binary.LittleEndian.Uint16(data[40:42])
@@ -66,11 +74,23 @@ func ParseNTLMChallenge(data []byte) (*NTLMChallenge, error) {
 	}
 	return ch, nil
 }
+func fromUnicode(b []byte) string {
+	u16 := make([]uint16, len(b)/2)
+	for i := 0; i < len(u16); i++ {
+		u16[i] = binary.LittleEndian.Uint16(b[i*2:])
+	}
+	return string(utf16.Decode(u16))
+}
 
 func GenerateNTLMAuthenticate(domain, user, password string, ch *NTLMChallenge) ([]byte, error) {
 	var clientNonce [8]byte
 	if _, err := rand.Read(clientNonce[:]); err != nil {
 		return nil, err
+	}
+
+	// اگر کاربر دامین نداده باشد، از TargetName سرور به عنوان دامین محلی استفاده می‌شود
+	if domain == "" && ch.TargetName != "" {
+		domain = ch.TargetName
 	}
 
 	ntlmHash := md4Hash(toUnicode(password))
@@ -88,14 +108,14 @@ func GenerateNTLMAuthenticate(domain, user, password string, ch *NTLMChallenge) 
 	blob.Write([]byte{0x00, 0x00, 0x00, 0x00})
 	if len(ch.TargetInfo) > 0 {
 		blob.Write(ch.TargetInfo)
+	} else {
+		blob.Write([]byte{0x00, 0x00, 0x00, 0x00})
 	}
-	blob.Write([]byte{0x00, 0x00, 0x00, 0x00})
 
 	hProof := hmac.New(md5.New, ntlmV2Hash)
 	hProof.Write(ch.ServerChallenge[:])
 	hProof.Write(blob.Bytes())
 	ntProofStr := hProof.Sum(nil)
-
 	ntChallengeResp := append(ntProofStr, blob.Bytes()...)
 
 	hLM := hmac.New(md5.New, ntlmV2Hash)
@@ -109,7 +129,6 @@ func GenerateNTLMAuthenticate(domain, user, password string, ch *NTLMChallenge) 
 
 	fixedHeaderLen := 64
 	offset := fixedHeaderLen
-
 	buf := make([]byte, offset)
 	copy(buf[0:8], ntlmSig)
 	binary.LittleEndian.PutUint32(buf[8:12], ntlmTypeAuthenticate)
@@ -124,7 +143,7 @@ func GenerateNTLMAuthenticate(domain, user, password string, ch *NTLMChallenge) 
 	binary.LittleEndian.PutUint16(buf[54:56], 0)
 	binary.LittleEndian.PutUint32(buf[56:60], uint32(offset))
 
-	flags := uint32(negotiateUnicode | negotiateNTLMKey | negotiateExtendedSec | negotiate128Bit | negotiate56Bit)
+	flags := uint32(negotiateUnicode | negotiateNTLMKey | negotiateAlwaysSign | negotiateExtendedSec | negotiate128Bit | negotiate56Bit)
 	binary.LittleEndian.PutUint32(buf[60:64], flags)
 
 	return buf, nil

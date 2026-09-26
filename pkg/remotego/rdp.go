@@ -3,6 +3,7 @@ package remotego
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -64,8 +65,17 @@ func (c *Client) rdpConnect(ctx context.Context, t Target, probe bool) (out rdpO
 
 	c.emitEvent(t, EventHandshaking, "negotiating RDP security protocols")
 	offer := rdp.ProtoSSL | rdp.ProtoHybrid | rdp.ProtoHybridEx
+
+	cookie := ""
+	if t.Auth.Username != "" {
+		cookie = fmt.Sprintf("Cookie: mstshash=%s", t.Auth.Username)
+	} else {
+		cookie = "Cookie: mstshash=Administrator"
+	}
+
 	neg, nerr := rdp.Negotiate(ctx, conn, rdp.Options{
 		Offer:              offer,
+		Cookie:             cookie,
 		ServerName:         t.Host,
 		InsecureSkipVerify: c.cfg.InsecureSkipTLSVerify,
 		Timeout:            c.cfg.HandshakeTimeout,

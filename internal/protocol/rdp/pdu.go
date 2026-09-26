@@ -108,13 +108,13 @@ const maxTPKTLength = 65535
 // balancers require.
 func WriteConnectionRequest(w io.Writer, cookie string, requestedProtocols SecurityProtocol) error {
 	var x224 []byte
-	x224 = append(x224, tpduCodeCR, 0x00, 0x00, 0x00, 0x00, 0x00) // CR, DST-REF, SRC-REF, class option
+	// طبق استاندارد X.224 مقدار SRC-REF نباید صفر باشد (0x12, 0x34 قرار داده شد)
+	x224 = append(x224, tpduCodeCR, 0x00, 0x00, 0x12, 0x34, 0x00)
 	if cookie != "" {
 		x224 = append(x224, []byte(cookie)...)
 		x224 = append(x224, 0x0D, 0x0A) // CRLF terminator per MS-RDPBCGR 2.2.1.1
 	}
 	x224 = append(x224, encodeNegotiationRequest(requestedProtocols)...)
-
 	frame, err := frameTPKT(withX224LengthIndicator(x224))
 	if err != nil {
 		return err
@@ -122,7 +122,6 @@ func WriteConnectionRequest(w io.Writer, cookie string, requestedProtocols Secur
 	_, err = w.Write(frame)
 	return err
 }
-
 func encodeNegotiationRequest(protocols SecurityProtocol) []byte {
 	buf := make([]byte, 8)
 	buf[0] = typeNegotiationRequest
