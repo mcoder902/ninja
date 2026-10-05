@@ -108,14 +108,12 @@ func GenerateNTLMAuthenticate(domain, user, password string, ch *NTLMChallenge) 
 		domain = ch.TargetName
 	}
 
-	// ۱. حل باگ دامین: تبدیل دامین و یوزر به حروف بزرگ طبق استاندارد MS-NLMP
 	ntlmHash := md4Hash(toUnicode(password))
 	h := hmac.New(md5.New, ntlmHash)
 	h.Write(toUnicode(strings.ToUpper(user)))
 	h.Write(toUnicode(strings.ToUpper(domain)))
 	ntlmV2Hash := h.Sum(nil)
 
-	// ۲. حل باگ تایم‌استمپ: اولویت با تایم‌استمپ سرور است تا مانع خطای Replay شود
 	var timestampBytes []byte
 	if serverTime := extractServerTimestamp(ch.TargetInfo); len(serverTime) == 8 {
 		timestampBytes = serverTime
@@ -129,14 +127,17 @@ func GenerateNTLMAuthenticate(domain, user, password string, ch *NTLMChallenge) 
 	var blob bytes.Buffer
 	blob.Write([]byte{0x01, 0x01, 0x00, 0x00}) // Signature
 	blob.Write([]byte{0x00, 0x00, 0x00, 0x00}) // Reserved
-	blob.Write(timestampBytes)                 // استفاده از تایم‌استمپ معتبر
+	blob.Write(timestampBytes)                 // تایم‌استمپ بدون خطای Replay
 	blob.Write(clientNonce[:])                 // Client Nonce
 	blob.Write([]byte{0x00, 0x00, 0x00, 0x00}) // Zero
+
 	if len(ch.TargetInfo) > 0 {
-		blob.Write(ch.TargetInfo)
+		cleanedTI := cleanTargetInfo(ch.TargetInfo)
+		blob.Write(cleanedTI)
 	} else {
-		blob.Write([]byte{0x00, 0x00, 0x00, 0x00})
+		blob.Write([]byte{0x00, 0x00, 0x00, 0x00}) // AvEOL
 	}
+	blob.Write([]byte{0x00, 0x00, 0x00, 0x00}) // Reserved4 (الزامی طبق استاندارد)
 
 	hProof := hmac.New(md5.New, ntlmV2Hash)
 	hProof.Write(ch.ServerChallenge[:])
@@ -169,13 +170,28 @@ func GenerateNTLMAuthenticate(domain, user, password string, ch *NTLMChallenge) 
 	binary.LittleEndian.PutUint16(buf[54:56], 0)
 	binary.LittleEndian.PutUint32(buf[56:60], uint32(offset))
 
-	// ۳. حل باگ فلگ: اضافه کردن negotiateTargetInfo به بسته احراز هویت
 	flags := uint32(negotiateUnicode | negotiateNTLMKey | negotiateAlwaysSign | negotiateExtendedSec | negotiateTargetInfo | negotiate128Bit | negotiate56Bit)
 	binary.LittleEndian.PutUint32(buf[60:64], flags)
 
 	return buf, nil
 }
-
+func cleanTargetInfo(targetInfo []byte) []byte {
+	var clean []byte
+	for i := 0; i+4 <= len(targetInfo); {
+		avId := binary.LittleEndian.Uint16(targetInfo[i : i+2])
+		avLen := int(binary.LittleEndian.Uint16(targetInfo[i+2 : i+4]))
+		if avId == 0 { // MsvAvEOL
+			break
+		}
+		// فیلتر کردن AvId = 6 (Flags/MIC) و AvId = 10 (ChannelBindings)
+		if avId != 6 && avId != 10 && i+4+avLen <= len(targetInfo) {
+			clean = append(clean, targetInfo[i:i+4+avLen]...)
+		}
+		i += 4 + avLen
+	}
+	clean = append(clean, 0x00, 0x00, 0x00, 0x00) // پایان معتبر با MsvAvEOL
+	return clean
+}
 func appendField(buf []byte, fieldOffset int, data []byte, currentOffset *int) []byte {
 	binary.LittleEndian.PutUint16(buf[fieldOffset:fieldOffset+2], uint16(len(data)))
 	binary.LittleEndian.PutUint16(buf[fieldOffset+2:fieldOffset+4], uint16(len(data)))

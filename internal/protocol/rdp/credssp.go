@@ -21,7 +21,7 @@ type TSRequest struct {
 	NegoTokens []NegoData `asn1:"explicit,optional,tag:1"`
 	AuthInfo   []byte     `asn1:"explicit,optional,tag:2"`
 	PubKeyAuth []byte     `asn1:"explicit,optional,tag:3"`
-	ErrorCode  int        `asn1:"explicit,optional,tag:4"`
+	ErrorCode  *int       `asn1:"explicit,optional,tag:4"` // حتماً باید پوینتر باشد تا Omit شود
 }
 
 type NegoData struct {
@@ -53,8 +53,8 @@ func AuthenticateCredSSP(ctx context.Context, conn net.Conn, domain, user, passw
 	if err != nil {
 		return err
 	}
-	if resp1.ErrorCode != 0 {
-		return mapNTStatus(uint32(resp1.ErrorCode))
+	if resp1.ErrorCode != nil && *resp1.ErrorCode != 0 {
+		return mapNTStatus(uint32(*resp1.ErrorCode))
 	}
 	if len(resp1.NegoTokens) == 0 {
 		return fmt.Errorf("credssp: empty nego tokens in challenge response")
@@ -87,11 +87,9 @@ func AuthenticateCredSSP(ctx context.Context, conn net.Conn, domain, user, passw
 		}
 		return err
 	}
-
-	if resp2.ErrorCode != 0 {
-		return mapNTStatus(uint32(resp2.ErrorCode))
+	if resp2.ErrorCode != nil && *resp2.ErrorCode != 0 {
+		return mapNTStatus(uint32(*resp2.ErrorCode))
 	}
-
 	return nil
 }
 
@@ -141,18 +139,16 @@ func readTSRequest(r io.Reader) (*TSRequest, error) {
 		if _, err := io.ReadFull(r, lenBuf); err != nil {
 			return nil, err
 		}
-		header = append(header, lenBuf...) // حفظ بایت‌های حیاتی طول
+		header = append(header, lenBuf...)
 		for _, b := range lenBuf {
 			length = (length << 8) | int(b)
 		}
 	}
 
-	body := GetBuffer(length)
+	body := make([]byte, length)
 	if _, err := io.ReadFull(r, body); err != nil {
-		PutBuffer(body)
 		return nil, err
 	}
-	defer PutBuffer(body)
 
 	fullPDU := append(header, body...)
 	var req TSRequest
