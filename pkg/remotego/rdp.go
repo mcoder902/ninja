@@ -121,7 +121,10 @@ func (c *Client) rdpConnect(ctx context.Context, t Target, probe bool) (out rdpO
 		})
 		defer stop()
 
-		aerr := rdp.AuthenticateCredSSP(ctx, neg.Conn, domain, user, t.Auth.Password)
+		logStep := func(step string) {
+			c.emitEvent(t, EventAuthenticating, step)
+		}
+		aerr := rdp.AuthenticateCredSSP(ctx, neg.Conn, domain, user, t.Auth.Password, logStep)
 		_ = neg.Conn.SetDeadline(time.Time{})
 
 		if aerr != nil {

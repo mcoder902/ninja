@@ -37,11 +37,16 @@ func (e *AuthError) Error() string {
 	return fmt.Sprintf("credssp: %s (NTSTATUS: 0x%08X)", e.Message, e.NTStatus)
 }
 
-func AuthenticateCredSSP(ctx context.Context, conn net.Conn, domain, user, password string) error {
-	fmt.Println("\n[*] CredSSP Step 1: Sending NTLM Negotiate (Type 1)...")
+func AuthenticateCredSSP(ctx context.Context, conn net.Conn, domain, user, password string, logFn ...func(string)) error {
+	logStep := func(msg string) {}
+	if len(logFn) > 0 && logFn[0] != nil {
+		logStep = logFn[0]
+	}
+
+	logStep("CredSSP Step 1: Sending NTLM Negotiate (Type 1)")
 	type1 := GenerateNTLMNegotiate()
 	req1 := TSRequest{
-		Version: 6, // ارتقا به نسخه ۶ جهت سازگاری با ویندوزهای آپدیت‌شده
+		Version: 6,
 		NegoTokens: []NegoData{
 			{NegoToken: type1},
 		},
@@ -50,7 +55,7 @@ func AuthenticateCredSSP(ctx context.Context, conn net.Conn, domain, user, passw
 		return fmt.Errorf("failed writing req1: %w", err)
 	}
 
-	fmt.Println("[*] CredSSP Step 2: Waiting for Server Challenge (Type 2)...")
+	logStep("CredSSP Step 2: Waiting for Server Challenge (Type 2)")
 	resp1, err := readTSRequest(conn)
 	if err != nil {
 		return fmt.Errorf("failed reading resp1: %w", err)
@@ -67,14 +72,14 @@ func AuthenticateCredSSP(ctx context.Context, conn net.Conn, domain, user, passw
 	if err != nil {
 		return err
 	}
-	fmt.Printf("[*] CredSSP Step 3: Challenge received! TargetName: %s\n", ch.TargetName)
+	logStep(fmt.Sprintf("CredSSP Step 3: Challenge received! TargetName: %s", ch.TargetName))
 
 	type3, err := GenerateNTLMAuthenticate(domain, user, password, ch)
 	if err != nil {
 		return err
 	}
 
-	fmt.Println("[*] CredSSP Step 4: Sending NTLM Authenticate (Type 3)...")
+	logStep("CredSSP Step 4: Sending NTLM Authenticate (Type 3)")
 	req2 := TSRequest{
 		Version: 6,
 		NegoTokens: []NegoData{
@@ -85,7 +90,7 @@ func AuthenticateCredSSP(ctx context.Context, conn net.Conn, domain, user, passw
 		return fmt.Errorf("failed writing req2: %w", err)
 	}
 
-	fmt.Println("[*] CredSSP Step 5: Waiting for Auth Result...")
+	logStep("CredSSP Step 5: Waiting for Auth Result")
 	resp2, err := readTSRequest(conn)
 	if err != nil {
 		if err == io.EOF {
@@ -97,7 +102,7 @@ func AuthenticateCredSSP(ctx context.Context, conn net.Conn, domain, user, passw
 		return mapNTStatus(uint32(*resp2.ErrorCode))
 	}
 
-	fmt.Println("[+] CredSSP Step 6: Success!")
+	logStep("CredSSP Step 6: Auth Success")
 	return nil
 }
 func mapNTStatus(code uint32) error {
