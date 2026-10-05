@@ -21,7 +21,7 @@ type TSRequest struct {
 	NegoTokens []NegoData `asn1:"explicit,optional,tag:1"`
 	AuthInfo   []byte     `asn1:"explicit,optional,tag:2"`
 	PubKeyAuth []byte     `asn1:"explicit,optional,tag:3"`
-	ErrorCode  *int       `asn1:"explicit,optional,tag:4"` // حتماً باید پوینتر باشد تا Omit شود
+	ErrorCode  *int       `asn1:"explicit,optional,tag:4"`
 }
 
 type NegoData struct {
@@ -38,21 +38,24 @@ func (e *AuthError) Error() string {
 }
 
 func AuthenticateCredSSP(ctx context.Context, conn net.Conn, domain, user, password string) error {
+	fmt.Println("\n[*] CredSSP Step 1: Sending NTLM Negotiate (Type 1)...")
 	type1 := GenerateNTLMNegotiate()
 	req1 := TSRequest{
-		Version: 2,
+		Version: 6, // ارتقا به نسخه ۶ جهت سازگاری با ویندوزهای آپدیت‌شده
 		NegoTokens: []NegoData{
 			{NegoToken: type1},
 		},
 	}
 	if err := writeTSRequest(conn, req1); err != nil {
-		return err
+		return fmt.Errorf("failed writing req1: %w", err)
 	}
 
+	fmt.Println("[*] CredSSP Step 2: Waiting for Server Challenge (Type 2)...")
 	resp1, err := readTSRequest(conn)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed reading resp1: %w", err)
 	}
+
 	if resp1.ErrorCode != nil && *resp1.ErrorCode != 0 {
 		return mapNTStatus(uint32(*resp1.ErrorCode))
 	}
@@ -64,35 +67,39 @@ func AuthenticateCredSSP(ctx context.Context, conn net.Conn, domain, user, passw
 	if err != nil {
 		return err
 	}
+	fmt.Printf("[*] CredSSP Step 3: Challenge received! TargetName: %s\n", ch.TargetName)
 
 	type3, err := GenerateNTLMAuthenticate(domain, user, password, ch)
 	if err != nil {
 		return err
 	}
 
+	fmt.Println("[*] CredSSP Step 4: Sending NTLM Authenticate (Type 3)...")
 	req2 := TSRequest{
-		Version: 2,
+		Version: 6,
 		NegoTokens: []NegoData{
 			{NegoToken: type3},
 		},
 	}
 	if err := writeTSRequest(conn, req2); err != nil {
-		return err
+		return fmt.Errorf("failed writing req2: %w", err)
 	}
 
+	fmt.Println("[*] CredSSP Step 5: Waiting for Auth Result...")
 	resp2, err := readTSRequest(conn)
 	if err != nil {
 		if err == io.EOF {
 			return &AuthError{NTStatus: StatusLogonFailure, Message: "authentication rejected by server"}
 		}
-		return err
+		return fmt.Errorf("failed reading resp2: %w", err)
 	}
 	if resp2.ErrorCode != nil && *resp2.ErrorCode != 0 {
 		return mapNTStatus(uint32(*resp2.ErrorCode))
 	}
+
+	fmt.Println("[+] CredSSP Step 6: Success!")
 	return nil
 }
-
 func mapNTStatus(code uint32) error {
 	switch code {
 	case StatusLogonFailure, StatusWrongPassword:

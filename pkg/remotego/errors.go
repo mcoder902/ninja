@@ -557,7 +557,15 @@ func IsSocketExhaustion(err error) bool {
 }
 
 func isResetOrRefused(err error) bool {
-	return errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED)
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		strings.Contains(errStr, "forcibly closed") ||
+		strings.Contains(errStr, "wsasend") ||
+		strings.Contains(errStr, "connection reset")
 }
 
 // ClassifyNetError inspects a raw error returned from a net.Dial /
