@@ -2,10 +2,15 @@ package rdp
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/asn1"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strings"
+	"syscall"
 )
 
 const (
@@ -16,12 +21,23 @@ const (
 	StatusPasswordExpired uint32 = 0xC0000071
 )
 
-type TSRequest struct {
-	Version    int        `asn1:"explicit,tag:0"`
-	NegoTokens []NegoData `asn1:"explicit,optional,tag:1"`
-	AuthInfo   []byte     `asn1:"explicit,optional,tag:2"`
-	PubKeyAuth []byte     `asn1:"explicit,optional,tag:3"`
-	ErrorCode  *int       `asn1:"explicit,optional,tag:4"`
+// ساختار مخصوص ارسال توسط کلاینت (بدون ErrorCode تا در ASN.1 تزریق نشود)
+type tsRequestOut struct {
+	Version     int        `asn1:"explicit,tag:0"`
+	NegoTokens  []NegoData `asn1:"explicit,optional,tag:1"`
+	AuthInfo    []byte     `asn1:"explicit,optional,tag:2"`
+	PubKeyAuth  []byte     `asn1:"explicit,optional,tag:3"`
+	ClientNonce []byte     `asn1:"explicit,optional,tag:5"`
+}
+
+// ساختار مخصوص دریافت از سرور
+type tsRequestIn struct {
+	Version     int        `asn1:"explicit,tag:0"`
+	NegoTokens  []NegoData `asn1:"explicit,optional,tag:1"`
+	AuthInfo    []byte     `asn1:"explicit,optional,tag:2"`
+	PubKeyAuth  []byte     `asn1:"explicit,optional,tag:3"`
+	ErrorCode   int        `asn1:"explicit,optional,tag:4"`
+	ClientNonce []byte     `asn1:"explicit,optional,tag:5"`
 }
 
 type NegoData struct {
@@ -37,7 +53,36 @@ func (e *AuthError) Error() string {
 	return fmt.Sprintf("credssp: %s (NTSTATUS: 0x%08X)", e.Message, e.NTStatus)
 }
 
-func AuthenticateCredSSP(ctx context.Context, conn net.Conn, domain, user, password string, logFn ...func(string)) error {
+func computePubKeyAuth(version int, serverPubKey, clientNonce []byte, sec *NTLMSessionSecurity) []byte {
+	if len(serverPubKey) == 0 || sec == nil {
+		return nil
+	}
+	if version >= 5 {
+		h := sha256.New()
+		h.Write([]byte("CredSSP Client-To-Server Binding Hash\x00"))
+		h.Write(clientNonce)
+		h.Write(serverPubKey)
+		return sec.Seal(h.Sum(nil))
+	}
+	pubCopy := make([]byte, len(serverPubKey))
+	copy(pubCopy, serverPubKey)
+	return sec.Seal(pubCopy)
+}
+
+func isAuthDropError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "forcibly closed") ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "broken pipe")
+}
+
+func AuthenticateCredSSP(ctx context.Context, conn net.Conn, serverPubKey []byte, domain, user, password string, logFn ...func(string)) error {
 	logStep := func(msg string) {}
 	if len(logFn) > 0 && logFn[0] != nil {
 		logStep = logFn[0]
@@ -45,24 +90,23 @@ func AuthenticateCredSSP(ctx context.Context, conn net.Conn, domain, user, passw
 
 	logStep("CredSSP Step 1: Sending NTLM Negotiate (Type 1)")
 	type1 := GenerateNTLMNegotiate()
-	req1 := TSRequest{
+	req1 := tsRequestOut{
 		Version: 6,
 		NegoTokens: []NegoData{
 			{NegoToken: type1},
 		},
 	}
 	if err := writeTSRequest(conn, req1); err != nil {
-		return fmt.Errorf("failed writing req1: %w", err)
+		return err
 	}
 
-	logStep("CredSSP Step 2: Waiting for Server Challenge (Type 2)")
+	logStep("CredSSP Step 2: Reading Server Challenge (Type 2)")
 	resp1, err := readTSRequest(conn)
 	if err != nil {
-		return fmt.Errorf("failed reading resp1: %w", err)
+		return err
 	}
-
-	if resp1.ErrorCode != nil && *resp1.ErrorCode != 0 {
-		return mapNTStatus(uint32(*resp1.ErrorCode))
+	if resp1.ErrorCode != 0 {
+		return mapNTStatus(uint32(resp1.ErrorCode))
 	}
 	if len(resp1.NegoTokens) == 0 {
 		return fmt.Errorf("credssp: empty nego tokens in challenge response")
@@ -72,43 +116,62 @@ func AuthenticateCredSSP(ctx context.Context, conn net.Conn, domain, user, passw
 	if err != nil {
 		return err
 	}
-	logStep(fmt.Sprintf("CredSSP Step 3: Challenge received! TargetName: %s", ch.TargetName))
+	logStep(fmt.Sprintf("CredSSP Step 3: Challenge parsed (Target=%s, Ver=%d)", ch.TargetName, resp1.Version))
 
-	type3, err := GenerateNTLMAuthenticate(domain, user, password, ch)
+	type3, sec, err := GenerateNTLMAuthenticate(type1, domain, user, password, ch)
 	if err != nil {
 		return err
 	}
 
-	logStep("CredSSP Step 4: Sending NTLM Authenticate (Type 3)")
-	req2 := TSRequest{
-		Version: 6,
+	version := resp1.Version
+	if version == 0 {
+		version = 2
+	}
+
+	var clientNonce []byte
+	if version >= 5 {
+		clientNonce = make([]byte, 32)
+		_, _ = rand.Read(clientNonce)
+	}
+
+	pubKeyAuth := computePubKeyAuth(version, serverPubKey, clientNonce, sec)
+
+	logStep("CredSSP Step 4: Sending NTLM Authenticate (Type 3) + PubKeyAuth")
+	req2 := tsRequestOut{
+		Version: version,
 		NegoTokens: []NegoData{
 			{NegoToken: type3},
 		},
+		PubKeyAuth:  pubKeyAuth,
+		ClientNonce: clientNonce,
 	}
 	if err := writeTSRequest(conn, req2); err != nil {
-		return fmt.Errorf("failed writing req2: %w", err)
-	}
-
-	logStep("CredSSP Step 5: Waiting for Auth Result")
-	resp2, err := readTSRequest(conn)
-	if err != nil {
-		if err == io.EOF {
+		if isAuthDropError(err) {
 			return &AuthError{NTStatus: StatusLogonFailure, Message: "authentication rejected by server"}
 		}
-		return fmt.Errorf("failed reading resp2: %w", err)
-	}
-	if resp2.ErrorCode != nil && *resp2.ErrorCode != 0 {
-		return mapNTStatus(uint32(*resp2.ErrorCode))
+		return err
 	}
 
-	logStep("CredSSP Step 6: Auth Success")
+	logStep("CredSSP Step 5: Reading Server Verification Response")
+	resp2, err := readTSRequest(conn)
+	if err != nil {
+		if isAuthDropError(err) {
+			return &AuthError{NTStatus: StatusLogonFailure, Message: "authentication rejected by server"}
+		}
+		return err
+	}
+	if resp2.ErrorCode != 0 {
+		return mapNTStatus(uint32(resp2.ErrorCode))
+	}
+
+	logStep("CredSSP Step 6: Authentication Confirmed!")
 	return nil
 }
+
 func mapNTStatus(code uint32) error {
 	switch code {
-	case StatusLogonFailure, StatusWrongPassword:
-		return &AuthError{NTStatus: code, Message: "invalid credentials"}
+	case StatusLogonFailure, StatusWrongPassword, 0x8009030C:
+		return &AuthError{NTStatus: StatusLogonFailure, Message: "invalid credentials"}
 	case StatusAccountLocked:
 		return &AuthError{NTStatus: code, Message: "account is locked"}
 	case StatusAccountDisabled:
@@ -120,7 +183,7 @@ func mapNTStatus(code uint32) error {
 	}
 }
 
-func writeTSRequest(w io.Writer, req TSRequest) error {
+func writeTSRequest(w io.Writer, req tsRequestOut) error {
 	data, err := asn1.Marshal(req)
 	if err != nil {
 		return err
@@ -129,7 +192,7 @@ func writeTSRequest(w io.Writer, req TSRequest) error {
 	return err
 }
 
-func readTSRequest(r io.Reader) (*TSRequest, error) {
+func readTSRequest(r io.Reader) (*tsRequestIn, error) {
 	var tag [2]byte
 	if _, err := io.ReadFull(r, tag[:]); err != nil {
 		return nil, err
@@ -163,7 +226,7 @@ func readTSRequest(r io.Reader) (*TSRequest, error) {
 	}
 
 	fullPDU := append(header, body...)
-	var req TSRequest
+	var req tsRequestIn
 	if _, err := asn1.Unmarshal(fullPDU, &req); err != nil {
 		return nil, err
 	}
