@@ -97,6 +97,8 @@ func Negotiate(ctx context.Context, conn net.Conn, opts Options) (*Negotiation, 
 		cfg := &tls.Config{
 			InsecureSkipVerify: true,
 			MinVersion:         tls.VersionTLS10,
+			MaxVersion:         tls.VersionTLS12, // بسیار حیاتی برای جلوگیری از ریست شدن سوکت در CredSSP ویندوز
+			Renegotiation:      tls.RenegotiateOnceAsClient,
 			CipherSuites:       suites,
 		}
 		tc := tls.Client(conn, cfg)

@@ -192,6 +192,9 @@ func buildTargetInfoWithMICFlag(targetInfo []byte) []byte {
 }
 
 func GenerateNTLMAuthenticate(type1 []byte, domain, user, password string, ch *NTLMChallenge) ([]byte, *NTLMSessionSecurity, error) {
+	if domain == "." {
+		domain = ""
+	}
 	var clientNonce [8]byte
 	if _, err := rand.Read(clientNonce[:]); err != nil {
 		return nil, nil, err
