@@ -49,7 +49,7 @@ type rdpOutcome struct {
 	err       error
 }
 
-func (c *Client) rdpConnect(ctx context.Context, t Target, probe bool) (out rdpOutcome) {
+func (c *Client) rdpConnect(ctx context.Context, t Target) (out rdpOutcome) {
 	addr := t.Addr()
 
 	c.emitEvent(t, EventDialing, "initiating RDP TCP connection")

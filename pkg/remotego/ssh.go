@@ -76,10 +76,7 @@ func (s *SSHSession) Exec(ctx context.Context, cmd string) (out []byte, err erro
 		return nil, ClassifyNetError(s.target.Addr(), err)
 	}
 	defer func(sess *ssh.Session) {
-		err := sess.Close()
-		if err != nil {
-
-		}
+		_ = sess.Close()
 	}(sess)
 
 	var buf bytes.Buffer
@@ -298,6 +295,10 @@ type sshOutcome struct {
 // sshConnect dials, handshakes and (optionally) authenticates. On success
 // with a non-nil client, the caller owns it. It classifies every failure
 // into a *RemoteError.
+//
+// Contract: on every failure path out.client is nil and the underlying
+// connection is already closed, so returning out.err never leaks a live
+// connection (verified: error paths never populate out.client).
 func (c *Client) sshConnect(ctx context.Context, t Target) (out sshOutcome) {
 	addr := t.Addr()
 

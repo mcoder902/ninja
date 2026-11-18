@@ -275,17 +275,11 @@ func GenerateNTLMAuthenticate(type1 []byte, domain, user, password string, ch *N
 	copy(buf[0:8], ntlmSig)
 	binary.LittleEndian.PutUint32(buf[8:12], ntlmTypeAuthenticate)
 
-	buf = appendField(buf, 12, domainBytes, &offset)
-	buf = appendField(buf, 20, userBytes, &offset)
-	buf = appendField(buf, 28, workstationBytes, &offset)
-	buf = appendField(buf, 36, lmChallengeResp, &offset)
-	buf = appendField(buf, 44, ntChallengeResp, &offset)
-	buf = appendField(buf, 52, encryptedRandomSessionKey, &offset)
-
-	// توجه: چیدمان استاندارد فیلدهای NTLM Type 3:
-	// 12: LmChallengeResponse, 20: NtChallengeResponse, 28: DomainName, 36: UserName, 44: Workstation, 52: EncryptedRandomSessionKey
-	offset = fixedHeaderLen
-	buf = buf[:fixedHeaderLen]
+	// چیدمان فیلدهای Type 3 طبق MS-NLMP:
+	// 12: LmChallengeResponse, 20: NtChallengeResponse, 28: DomainName,
+	// 36: UserName, 44: Workstation, 52: EncryptedRandomSessionKey
+	// NOTE: بلوک تکراری قبلی که خروجی‌اش با buf[:fixedHeaderLen] دور ریخته
+	// می‌شد حذف شد؛ رفتار نهایی کد تغییری نکرده است.
 	buf = appendField(buf, 28, domainBytes, &offset)
 	buf = appendField(buf, 36, userBytes, &offset)
 	buf = appendField(buf, 44, workstationBytes, &offset)

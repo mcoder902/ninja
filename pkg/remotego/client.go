@@ -19,12 +19,6 @@ type Client struct {
 	closed atomic.Bool
 }
 
-func panicGuard(target string, errp *error) {
-	if r := recover(); r != nil {
-		*errp = panicToError(target, r, string(debug.Stack()))
-	}
-}
-
 func (c *Client) begin(t Target, ctx context.Context) (context.Context, func(), error) {
 	if c.closed.Load() {
 		return ctx, func() {}, NewError(ErrCodeClientClosed, t.Addr(), nil)
@@ -167,7 +161,7 @@ func (c *Client) probeSSH(ctx context.Context, t Target, result *ProbeResult) er
 }
 
 func (c *Client) probeRDP(ctx context.Context, t Target, result *ProbeResult) error {
-	out := c.rdpConnect(ctx, t, true)
+	out := c.rdpConnect(ctx, t)
 	result.Reachable = out.reachable
 	result.ProtocolConfirmed = out.confirmed
 	result.Banner = out.banner
@@ -220,7 +214,7 @@ func (c *Client) Dial(ctx context.Context, t Target) (session Session, retErr er
 			return nil
 
 		case ProtocolRDP:
-			out := c.rdpConnect(ctx, t, false)
+			out := c.rdpConnect(ctx, t)
 			if out.err != nil {
 				return out.err
 			}

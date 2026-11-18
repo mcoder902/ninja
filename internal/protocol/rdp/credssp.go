@@ -83,6 +83,13 @@ func isAuthDropError(err error) bool {
 }
 
 func AuthenticateCredSSP(ctx context.Context, conn net.Conn, serverPubKey []byte, domain, user, password string, logFn ...func(string)) error {
+	// ctx اینجا مستقیم برای I/O استفاده نمی‌شود (لغو اتصال توسط caller با
+	// context.AfterFunc انجام می‌شود که conn را می‌بندد)؛ این گارد فقط
+	// لغوِ قبلی را سریع تشخیص می‌دهد.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	logStep := func(msg string) {}
 	if len(logFn) > 0 && logFn[0] != nil {
 		logStep = logFn[0]
@@ -192,6 +199,10 @@ func writeTSRequest(w io.Writer, req tsRequestOut) error {
 	return err
 }
 
+// maxTSRequestLength سقف امن طول پیام TSRequest؛ هم‌راستا با سقف TPKT
+// در pdu.go تا یک سرور مخرب نتواند تخصیص حافظه‌ی نامحدود تحمیل کند.
+const maxTSRequestLength = 65535
+
 func readTSRequest(r io.Reader) (*tsRequestIn, error) {
 	var tag [2]byte
 	if _, err := io.ReadFull(r, tag[:]); err != nil {
@@ -218,6 +229,11 @@ func readTSRequest(r io.Reader) (*tsRequestIn, error) {
 		for _, b := range lenBuf {
 			length = (length << 8) | int(b)
 		}
+	}
+
+	// سقف امن: مانع تخصیص حافظه‌ی عظیم در برابر طول غیرواقعی از سرور مخرب
+	if length > maxTSRequestLength {
+		return nil, fmt.Errorf("credssp: implausible TSRequest length %d", length)
 	}
 
 	body := make([]byte, length)

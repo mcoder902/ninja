@@ -25,7 +25,10 @@ func GetBuffer(size int) []byte {
 
 // PutBuffer بافر را پس از استفاده به استخر برمی‌گرداند
 func PutBuffer(buf []byte) {
-	if cap(buf) >= maxTPKTLength {
+	// «==» نه «>=»: بافرهای بزرگ‌تر از حد استاندارد (تخصیص یک‌باره در
+	// GetBuffer) نباید وارد استخر شوند؛ وگرنه برای همیشه در استخر
+	// می‌مانند و حافظه‌ی اشغال‌شده آزاد نمی‌شود.
+	if cap(buf) == maxTPKTLength {
 		// بازگرداندن اسلایس با ظرفیت کامل به استخر
 		fullSlice := buf[:cap(buf)]
 		rdpBufferPool.Put(&fullSlice)
