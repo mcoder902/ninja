@@ -118,17 +118,19 @@ func ParseNTLMChallenge(data []byte) (*NTLMChallenge, error) {
 	if len(data) >= 20 {
 		tNameLen := binary.LittleEndian.Uint16(data[12:14])
 		tNameOffset := binary.LittleEndian.Uint32(data[16:20])
-		if int(tNameOffset+uint32(tNameLen)) <= len(data) && tNameLen > 0 {
-			ch.TargetName = fromUnicode(data[tNameOffset : tNameOffset+uint32(tNameLen)])
+		// محاسبه در int64 تا سرریز uint32 نتواند چک را دور بزند و پانیک slice بدهد
+		if tNameLen > 0 && int64(tNameOffset)+int64(tNameLen) <= int64(len(data)) {
+			ch.TargetName = fromUnicode(data[int(tNameOffset) : int(tNameOffset)+int(tNameLen)])
 		}
 	}
 
 	if len(data) >= 48 {
 		tiLen := binary.LittleEndian.Uint16(data[40:42])
 		tiOffset := binary.LittleEndian.Uint32(data[44:48])
-		if int(tiOffset+uint32(tiLen)) <= len(data) {
+		// همان محاسبه ایمن int64 برای TargetInfo
+		if int64(tiOffset)+int64(tiLen) <= int64(len(data)) {
 			ch.TargetInfo = make([]byte, tiLen)
-			copy(ch.TargetInfo, data[tiOffset:tiOffset+uint32(tiLen)])
+			copy(ch.TargetInfo, data[int(tiOffset):int(tiOffset)+int(tiLen)])
 		}
 	}
 	return ch, nil
